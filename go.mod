@@ -15,6 +15,7 @@ require (
 	github.com/abbot/go-http-auth v0.4.0
 	github.com/anacrolix/dms v1.5.0
 	github.com/anacrolix/log v0.13.1
+	github.com/andrewjjenkins/picsync v0.0.0-20230223180719-502d04078cc4
 	github.com/artyom/mtab v1.0.0
 	github.com/atotto/clipboard v0.1.4
 	github.com/aws/aws-sdk-go v1.44.246
@@ -104,20 +105,23 @@ require (
 	github.com/jcmturner/goidentity/v6 v6.0.1 // indirect
 	github.com/jcmturner/rpc/v2 v2.0.3 // indirect
 	github.com/jmespath/go-jmespath v0.4.0 // indirect
+	github.com/json-iterator/go v1.1.12 // indirect
 	github.com/jtolio/eventkit v0.0.0-20221004135224-074cf276595b // indirect
 	github.com/klauspost/cpuid/v2 v2.0.12 // indirect
 	github.com/kr/fs v0.1.0 // indirect
 	github.com/kylelemons/godebug v1.1.0 // indirect
 	github.com/lucasb-eyer/go-colorful v1.2.0 // indirect
 	github.com/lufia/plan9stats v0.0.0-20211012122336-39d0f177ccd0 // indirect
-	github.com/mattn/go-isatty v0.0.16 // indirect
-	github.com/matttproud/golang_protobuf_extensions v1.0.1 // indirect
+	github.com/mattn/go-isatty v0.0.17 // indirect
+	github.com/matttproud/golang_protobuf_extensions v1.0.4 // indirect
+	github.com/modern-go/concurrent v0.0.0-20180306012644-bacd9c7ef1dd // indirect
+	github.com/modern-go/reflect2 v1.0.2 // indirect
 	github.com/pengsrc/go-shared v0.2.1-0.20190131101655-1999055a4a14 // indirect
 	github.com/pkg/browser v0.0.0-20210911075715-681adbf594b8 // indirect
 	github.com/power-devops/perfstat v0.0.0-20210106213030-5aafc221ea8c // indirect
 	github.com/prometheus/client_model v0.3.0 // indirect
-	github.com/prometheus/common v0.37.0 // indirect
-	github.com/prometheus/procfs v0.8.0 // indirect
+	github.com/prometheus/common v0.40.0 // indirect
+	github.com/prometheus/procfs v0.9.0 // indirect
 	github.com/russross/blackfriday/v2 v2.1.0 // indirect
 	github.com/shoenig/go-m1cpu v0.1.4 // indirect
 	github.com/sony/gobreaker v0.5.0 // indirect
@@ -133,7 +137,6 @@ require (
 	google.golang.org/genproto v0.0.0-20230331144136-dcfb400f0633 // indirect
 	google.golang.org/grpc v1.54.0 // indirect
 	google.golang.org/protobuf v1.30.0 // indirect
-	gopkg.in/check.v1 v1.0.0-20201130134442-10cb98267c6c // indirect
 	gopkg.in/yaml.v3 v3.0.1 // indirect
 	storj.io/common v0.0.0-20221123115229-fed3e6651b63 // indirect
 	storj.io/drpc v0.0.32 // indirect
