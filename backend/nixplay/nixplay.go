@@ -15,6 +15,7 @@ import (
 	"github.com/rclone/rclone/fs"
 	"github.com/rclone/rclone/fs/config/configmap"
 	"github.com/rclone/rclone/fs/config/configstruct"
+	"github.com/rclone/rclone/fs/config/obscure"
 	"github.com/rclone/rclone/fs/hash"
 	"github.com/rclone/rclone/fs/log"
 )
@@ -53,6 +54,11 @@ func NewFs(ctx context.Context, name string, root string, m configmap.Mapper) (f
 	root = strings.Trim(path.Clean(root), "/")
 	if root == "." || root == "/" {
 		root = ""
+	}
+
+	opt.Password, err = obscure.Reveal(opt.Password)
+	if err != nil {
+		return nil, err
 	}
 
 	nixplayClient, err := nixplayapi.NewClient(opt.UserName, opt.Password, nil)
@@ -172,6 +178,7 @@ func (f *Fs) List(ctx context.Context, dir string) (entries fs.DirEntries, err e
 }
 
 func (f *Fs) listAlbums(ctx context.Context, prefix string) (entries fs.DirEntries, err error) {
+	defer log.Trace(f, "prefix=%q", prefix)("err=%v", &err)
 	albums, err := f.nixplayClient.GetAlbums()
 	if err != nil {
 		return nil, err
@@ -183,20 +190,26 @@ func (f *Fs) listAlbums(ctx context.Context, prefix string) (entries fs.DirEntri
 		entries = append(entries, d)
 	}
 
+	fmt.Println(len(entries))
+
 	return entries, nil
 }
 
 func (f *Fs) listAlbumPhotos(ctx context.Context, prefix string, dir string) (entries fs.DirEntries, err error) {
+	defer log.Trace(f, "prefix=%q dir=%q", prefix, dir)("err=%v", &err)
+
 	//xxx TODO
 	return fs.DirEntries{}, nil
 }
 
 func (f *Fs) listPlaylists(ctx context.Context, prefix string) (entries fs.DirEntries, err error) {
+	defer log.Trace(f, "prefix=%q", prefix)("err=%v", &err)
 	//xxx TODO
 	return fs.DirEntries{}, nil
 }
 
 func (f *Fs) listPlaylistPhotos(ctx context.Context, prefix string, dir string) (entries fs.DirEntries, err error) {
+	defer log.Trace(f, "prefix=%q dir=%q", prefix, dir)("err=%v", &err)
 	//xxx TODO
 	return fs.DirEntries{}, nil
 }
@@ -208,7 +221,9 @@ func (f *Fs) dirTime() time.Time {
 
 // NewObject finds the Object at remote.  If it can't be found
 // it returns the error fs.ErrorObjectNotFound.
-func (f *Fs) NewObject(ctx context.Context, remote string) (fs.Object, error) {
+func (f *Fs) NewObject(ctx context.Context, remote string) (_ fs.Object, err error) {
+	defer log.Trace(f, "remote=%q", remote)("err=%v", &err)
+
 	//xxx todo
 	return nil, fs.ErrorObjectNotFound
 }
