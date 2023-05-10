@@ -61,7 +61,7 @@ var patterns = dirPatterns{
 		re:       `^album/(.+)$`,
 		canMkdir: true,
 		toEntries: func(ctx context.Context, f lister, prefix string, match []string) (entries fs.DirEntries, err error) {
-			return f.listAlbumPhotos(ctx, prefix, match[0])
+			return f.listAlbumPhotos(ctx, prefix, match[1])
 		},
 	},
 	{
@@ -79,7 +79,7 @@ var patterns = dirPatterns{
 		re:       `^playlist/(.+)$`,
 		canMkdir: true,
 		toEntries: func(ctx context.Context, f lister, prefix string, match []string) (entries fs.DirEntries, err error) {
-			return f.listPlaylistPhotos(ctx, prefix, match[0])
+			return f.listPlaylistPhotos(ctx, prefix, match[1])
 
 		},
 	},

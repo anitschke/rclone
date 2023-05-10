@@ -1,6 +1,7 @@
 package nixplay
 
 import (
+	"bytes"
 	"context"
 	"errors"
 	"fmt"
@@ -18,6 +19,10 @@ import (
 	"github.com/rclone/rclone/fs/config/obscure"
 	"github.com/rclone/rclone/fs/hash"
 	"github.com/rclone/rclone/fs/log"
+)
+
+var (
+	errCantUpload = errors.New("can't upload files here")
 )
 
 // xxx "Use lib/encoder to make sure we can encode any path name and rclone info to help determine the encodings needed"
@@ -116,12 +121,14 @@ type Fs struct {
 
 // Object describes a storage object
 //
-// Will definitely have info but maybe not meta
+// # Will definitely have info but maybe not meta
+//
+// xxx rename to photo?
 type Object struct {
 	fs       *Fs       // what this object is part of
 	remote   string    // The remote path
 	url      string    // download path
-	id       string    // ID of this object
+	id       int       // ID of this object
 	bytes    int64     // Bytes in the object
 	modTime  time.Time // Modified time of the object
 	mimeType string
@@ -198,8 +205,32 @@ func (f *Fs) listAlbums(ctx context.Context, prefix string) (entries fs.DirEntri
 func (f *Fs) listAlbumPhotos(ctx context.Context, prefix string, dir string) (entries fs.DirEntries, err error) {
 	defer log.Trace(f, "prefix=%q dir=%q", prefix, dir)("err=%v", &err)
 
-	//xxx TODO
-	return fs.DirEntries{}, nil
+	albums, err := f.nixplayClient.GetAlbumsByName(dir)
+	if err != nil {
+		return nil, fmt.Errorf("failed to get album: %w", err)
+	}
+	if len(albums) != 1 {
+		return nil, fmt.Errorf("got %d albums for %q", len(albums), dir)
+	}
+
+	//xxx needs pagination
+	page := 1
+	limit := 50
+	photos, err := f.nixplayClient.GetPhotos(albums[0].ID, page, limit)
+	if err != nil {
+		return nil, fmt.Errorf("failed to get photos: %w", err)
+	}
+
+	for _, p := range photos {
+		entries = append(entries, &Object{
+			fs:      f,
+			id:      p.ID,
+			modTime: f.startTime, //xxx can I do better?
+			remote:  prefix + p.Filename,
+		})
+	}
+
+	return entries, nil
 }
 
 func (f *Fs) listPlaylists(ctx context.Context, prefix string) (entries fs.DirEntries, err error) {
@@ -234,8 +265,13 @@ func (f *Fs) NewObject(ctx context.Context, remote string) (_ fs.Object, err err
 //
 // The new object may have been created if an error is returned
 func (f *Fs) Put(ctx context.Context, in io.Reader, src fs.ObjectInfo, options ...fs.OpenOption) (fs.Object, error) {
-	//xxx todo
-	return nil, errors.New("TODO")
+	defer log.Trace(f, "src=%+v", src)("")
+	// Temporary Object under construction
+	o := &Object{
+		fs:     f,
+		remote: src.Remote(),
+	}
+	return o, o.Update(ctx, in, src, options...)
 }
 
 // Mkdir creates the album if it doesn't exist
@@ -323,8 +359,47 @@ func (o *Object) Open(ctx context.Context, options ...fs.OpenOption) (in io.Read
 //
 // The new object may have been created if an error is returned
 func (o *Object) Update(ctx context.Context, in io.Reader, src fs.ObjectInfo, options ...fs.OpenOption) (err error) {
-	//xxx todo
-	return errors.New("TODO")
+	defer log.Trace(o, "src=%+v", src)("err=%v", &err)
+	match, _, pattern := patterns.match(o.fs.root, o.remote, true)
+	if pattern == nil || !pattern.isFile || !pattern.canUpload {
+		return errCantUpload
+	}
+
+	albumName := match[1]
+	fileName := match[2]
+
+	//xxx
+	fmt.Println(albumName)
+	fmt.Println(fileName)
+
+	albums, err := o.fs.nixplayClient.GetAlbumsByName(albumName)
+	if err != nil {
+		return fmt.Errorf("failed to get album: %w", err)
+	}
+	if len(albums) != 1 {
+		return fmt.Errorf("got %d albums for %q", len(albums), albumName)
+	}
+
+	// xxx why is file name and file type separate? Is it mime type or extension or ...?
+	// lets just guess it is the mime type for now and hardcode jpeg?
+
+	// xxx ugh this is a really inefficient way to get the file size... but it works for now.
+	var buf bytes.Buffer
+	size, err := io.Copy(&buf, in)
+	if err != nil {
+		fmt.Println(err)
+	}
+
+	fileType := "image/jpeg"
+	err = o.fs.nixplayClient.UploadPhoto(albums[0].ID, fileName, fileType, uint64(size), io.NopCloser(&buf))
+	if err != nil {
+		return fmt.Errorf("failed to upload photo: %w", err)
+	}
+
+	// xxx so now we have uploaded the photo, but the problem is UploadPhoto
+	// doesn't tell us the new ID of the photo that was uploaded
+	// So for now we will just error out, this needs to get fixed though.
+	return errors.New("TODO upload worked but due to issue where UploadPhoto doesn't tell us ID of uploaded photo we can't continue")
 }
 
 // Remove an object
@@ -342,7 +417,7 @@ func (o *Object) MimeType(ctx context.Context) string {
 // ID of an Object if known, "" otherwise
 func (o *Object) ID() string {
 	//xxx todo
-	return o.id
+	return strconv.Itoa(o.id)
 }
 
 // Check the interfaces are satisfied
