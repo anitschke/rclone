@@ -9,6 +9,7 @@ import (
 	"strings"
 	"time"
 
+	nixplaytypes "github.com/anitschke/go-nixplay/types"
 	"github.com/rclone/rclone/fs"
 )
 
@@ -17,10 +18,8 @@ import (
 // lister describes the subset of the interfaces on Fs needed for the
 // file pattern parsing
 type lister interface {
-	listAlbums(ctx context.Context, prefix string) (entries fs.DirEntries, err error)
-	listAlbumPhotos(ctx context.Context, prefix string, dir string) (entries fs.DirEntries, err error)
-	listPlaylists(ctx context.Context, prefix string) (entries fs.DirEntries, err error)
-	listPlaylistPhotos(ctx context.Context, prefix string, dir string) (entries fs.DirEntries, err error)
+	listContainers(ctx context.Context, prefix string, containerType nixplaytypes.ContainerType) (entries fs.DirEntries, err error)
+	listPhotos(ctx context.Context, prefix string, containerType nixplaytypes.ContainerType, dir string) (entries fs.DirEntries, err error)
 	dirTime() time.Time //xxx needed?
 }
 
@@ -54,14 +53,14 @@ var patterns = dirPatterns{
 	{
 		re: `^album$`,
 		toEntries: func(ctx context.Context, f lister, prefix string, match []string) (entries fs.DirEntries, err error) {
-			return f.listAlbums(ctx, prefix)
+			return f.listContainers(ctx, prefix, nixplaytypes.AlbumContainerType)
 		},
 	},
 	{
 		re:       `^album/(.+)$`,
 		canMkdir: true,
 		toEntries: func(ctx context.Context, f lister, prefix string, match []string) (entries fs.DirEntries, err error) {
-			return f.listAlbumPhotos(ctx, prefix, match[1])
+			return f.listPhotos(ctx, prefix, nixplaytypes.AlbumContainerType, match[1])
 		},
 	},
 	{
@@ -72,14 +71,14 @@ var patterns = dirPatterns{
 	{
 		re: `^playlist$`,
 		toEntries: func(ctx context.Context, f lister, prefix string, match []string) (entries fs.DirEntries, err error) {
-			return f.listPlaylists(ctx, prefix)
+			return f.listContainers(ctx, prefix, nixplaytypes.PlaylistContainerType)
 		},
 	},
 	{
 		re:       `^playlist/(.+)$`,
 		canMkdir: true,
 		toEntries: func(ctx context.Context, f lister, prefix string, match []string) (entries fs.DirEntries, err error) {
-			return f.listPlaylistPhotos(ctx, prefix, match[1])
+			return f.listPhotos(ctx, prefix, nixplaytypes.PlaylistContainerType, match[1])
 
 		},
 	},

@@ -15,7 +15,7 @@ require (
 	github.com/abbot/go-http-auth v0.4.0
 	github.com/anacrolix/dms v1.5.0
 	github.com/anacrolix/log v0.13.1
-	github.com/andrewjjenkins/picsync v0.0.0-20230223180719-502d04078cc4
+	github.com/anitschke/go-nixplay v0.0.0
 	github.com/artyom/mtab v1.0.0
 	github.com/atotto/clipboard v0.1.4
 	github.com/aws/aws-sdk-go v1.44.246
@@ -75,6 +75,9 @@ require (
 	gopkg.in/yaml.v2 v2.4.0
 	storj.io/uplink v1.10.0
 )
+
+//xxx cut release and update version
+replace github.com/anitschke/go-nixplay v0.0.0 => /home/anitschk/sandbox/go-nixplay
 
 require (
 	cloud.google.com/go/compute v1.19.0 // indirect

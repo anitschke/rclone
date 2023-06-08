@@ -3,6 +3,8 @@ package nixplay
 import (
 	"bytes"
 	"context"
+	"encoding/base64"
+	"encoding/binary"
 	"errors"
 	"fmt"
 	"io"
@@ -12,7 +14,8 @@ import (
 	"sync"
 	"time"
 
-	nixplayapi "github.com/andrewjjenkins/picsync/pkg/nixplay"
+	nixplayapi "github.com/anitschke/go-nixplay"
+	nixplaytypes "github.com/anitschke/go-nixplay/types"
 	"github.com/rclone/rclone/fs"
 	"github.com/rclone/rclone/fs/config/configmap"
 	"github.com/rclone/rclone/fs/config/configstruct"
@@ -61,12 +64,16 @@ func NewFs(ctx context.Context, name string, root string, m configmap.Mapper) (f
 		root = ""
 	}
 
-	opt.Password, err = obscure.Reveal(opt.Password)
+	auth := nixplaytypes.Authorization{
+		Username: opt.UserName,
+	}
+
+	auth.Password, err = obscure.Reveal(opt.Password)
 	if err != nil {
 		return nil, err
 	}
 
-	nixplayClient, err := nixplayapi.NewClient(opt.UserName, opt.Password, nil)
+	nixplayClient, err := nixplayapi.NewDefaultClient(ctx, auth, nixplayapi.DefaultClientOptions{})
 	if err != nil {
 		return nil, fmt.Errorf("failed to create nixplay client: %w", err)
 	}
@@ -81,7 +88,7 @@ func NewFs(ctx context.Context, name string, root string, m configmap.Mapper) (f
 
 	//xxx double check this
 	f.features = (&fs.Features{
-		ReadMimeType: true,
+		ReadMimeType: true, //xxx
 	}).Fill(ctx, f)
 
 	_, _, pattern := patterns.match(f.root, "", true)
@@ -184,65 +191,71 @@ func (f *Fs) List(ctx context.Context, dir string) (entries fs.DirEntries, err e
 	return nil, fs.ErrorDirNotFound
 }
 
-func (f *Fs) listAlbums(ctx context.Context, prefix string) (entries fs.DirEntries, err error) {
+func (f *Fs) listContainers(ctx context.Context, prefix string, containerType nixplaytypes.ContainerType) (entries fs.DirEntries, err error) {
 	defer log.Trace(f, "prefix=%q", prefix)("err=%v", &err)
-	albums, err := f.nixplayClient.GetAlbums()
+
+	containers, err := f.nixplayClient.Containers(ctx, containerType)
 	if err != nil {
 		return nil, err
 	}
 
-	for _, a := range albums {
-		d := fs.NewDir(prefix+a.Title, f.dirTime())
-		d.SetID(strconv.Itoa(a.ID)).SetItems(int64(a.PhotoCount))
+	for _, c := range containers {
+		name, err := c.Name(ctx)
+		if err != nil {
+			return nil, err
+		}
+		d := fs.NewDir(prefix+name, f.dirTime())
+
+		id := c.ID()
+		idString := base64.URLEncoding.EncodeToString(id[:])
+		d.SetID(idString)
+
+		itemCount, err := c.PhotoCount(ctx)
+		if err != nil {
+			return nil, err
+		}
+		d.SetItems(itemCount)
+
 		entries = append(entries, d)
 	}
-
-	fmt.Println(len(entries))
 
 	return entries, nil
 }
 
-func (f *Fs) listAlbumPhotos(ctx context.Context, prefix string, dir string) (entries fs.DirEntries, err error) {
+func (f *Fs) listPhotos(ctx context.Context, prefix string, containerType nixplaytypes.ContainerType, dir string) (entries fs.DirEntries, err error) {
 	defer log.Trace(f, "prefix=%q dir=%q", prefix, dir)("err=%v", &err)
 
-	albums, err := f.nixplayClient.GetAlbumsByName(dir)
+	c, err := f.nixplayClient.Container(ctx, containerType, dir)
 	if err != nil {
-		return nil, fmt.Errorf("failed to get album: %w", err)
+		return nil, fmt.Errorf("failed to get container %q: %w", dir, err)
 	}
-	if len(albums) != 1 {
-		return nil, fmt.Errorf("got %d albums for %q", len(albums), dir)
+	if c == nil {
+		return nil, fmt.Errorf("container %q does not exist: %w", dir)
 	}
 
-	//xxx needs pagination
-	page := 1
-	limit := 50
-	photos, err := f.nixplayClient.GetPhotos(albums[0].ID, page, limit)
+	photos, err := c.Photos(ctx)
 	if err != nil {
 		return nil, fmt.Errorf("failed to get photos: %w", err)
 	}
 
 	for _, p := range photos {
+		id := p.ID()
+		idInt := int(binary.BigEndian.Uint64(id[:]))
+
+		name, err := p.Name(ctx)
+		if err != nil {
+			return nil, err
+		}
+
 		entries = append(entries, &Object{
 			fs:      f,
-			id:      p.ID,
+			id:      idInt,
 			modTime: f.startTime, //xxx can I do better?
-			remote:  prefix + p.Filename,
+			remote:  prefix + name,
 		})
 	}
 
 	return entries, nil
-}
-
-func (f *Fs) listPlaylists(ctx context.Context, prefix string) (entries fs.DirEntries, err error) {
-	defer log.Trace(f, "prefix=%q", prefix)("err=%v", &err)
-	//xxx TODO
-	return fs.DirEntries{}, nil
-}
-
-func (f *Fs) listPlaylistPhotos(ctx context.Context, prefix string, dir string) (entries fs.DirEntries, err error) {
-	defer log.Trace(f, "prefix=%q dir=%q", prefix, dir)("err=%v", &err)
-	//xxx TODO
-	return fs.DirEntries{}, nil
 }
 
 // dirTime returns the time to set a directory to
