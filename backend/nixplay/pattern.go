@@ -23,13 +23,17 @@ type lister interface {
 	dirTime() time.Time //xxx needed?
 }
 
+//xxx I don't think I need both isFile and canUpload?
+
 // dirPattern describes a single directory pattern
 type dirPattern struct {
-	re        string         // match for the path
-	match     *regexp.Regexp // compiled match
-	canUpload bool           // true if can upload here
-	canMkdir  bool           // true if can make a directory here
-	isFile    bool           // true if this is a file
+	re            string         // match for the path
+	match         *regexp.Regexp // compiled match
+	canUpload     bool           // true if can upload here
+	isFile        bool           // true if this is a file
+	canMkdir      bool           // true if can make (or delete) a directory here
+	containerType nixplaytypes.ContainerType
+
 	// function to turn a match into DirEntries
 	toEntries func(ctx context.Context, f lister, prefix string, match []string) (fs.DirEntries, error)
 }
@@ -57,16 +61,18 @@ var patterns = dirPatterns{
 		},
 	},
 	{
-		re:       `^album/(.+)$`,
-		canMkdir: true,
+		re: `^album/(.+)$`,
 		toEntries: func(ctx context.Context, f lister, prefix string, match []string) (entries fs.DirEntries, err error) {
 			return f.listPhotos(ctx, prefix, nixplaytypes.AlbumContainerType, match[1])
 		},
+		canMkdir:      true,
+		containerType: nixplaytypes.AlbumContainerType,
 	},
 	{
-		re:        `^album/(.+?)/([^/]+)$`,
-		canUpload: true,
-		isFile:    true,
+		re:            `^album/(.+?)/([^/]+)$`,
+		canUpload:     true,
+		isFile:        true,
+		containerType: nixplaytypes.AlbumContainerType,
 	},
 	{
 		re: `^playlist$`,
@@ -75,17 +81,18 @@ var patterns = dirPatterns{
 		},
 	},
 	{
-		re:       `^playlist/(.+)$`,
-		canMkdir: true,
+		re: `^playlist/(.+)$`,
 		toEntries: func(ctx context.Context, f lister, prefix string, match []string) (entries fs.DirEntries, err error) {
 			return f.listPhotos(ctx, prefix, nixplaytypes.PlaylistContainerType, match[1])
-
 		},
+		canMkdir:      true,
+		containerType: nixplaytypes.PlaylistContainerType,
 	},
 	{
-		re:        `^playlist/(.+?)/([^/]+)$`,
-		canUpload: true,
-		isFile:    true,
+		re:            `^playlist/(.+?)/([^/]+)$`,
+		canUpload:     true,
+		isFile:        true,
+		containerType: nixplaytypes.PlaylistContainerType,
 	},
 }.mustCompile()
 

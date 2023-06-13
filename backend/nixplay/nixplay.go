@@ -1,15 +1,14 @@
 package nixplay
 
 import (
-	"bytes"
 	"context"
 	"encoding/base64"
-	"encoding/binary"
+	"encoding/hex"
 	"errors"
 	"fmt"
 	"io"
 	"path"
-	"strconv"
+	"path/filepath"
 	"strings"
 	"sync"
 	"time"
@@ -26,9 +25,15 @@ import (
 
 var (
 	errCantUpload = errors.New("can't upload files here")
+	errCantRmdir  = errors.New("can't remove this directory")
+	errCantMkdir  = errors.New("can't make directories here")
 )
 
 // xxx "Use lib/encoder to make sure we can encode any path name and rclone info to help determine the encodings needed"
+
+//xxx test what happens if I try to put two photos with same content in same album
+
+//xxx test what happens if I try to put two photos with same name in same album
 
 // Register with Fs
 func init() {
@@ -126,19 +131,15 @@ type Fs struct {
 	nixplayClient nixplayapi.Client
 }
 
-// Object describes a storage object
+// Photo describes a storage object
 //
 // # Will definitely have info but maybe not meta
 //
 // xxx rename to photo?
-type Object struct {
-	fs       *Fs       // what this object is part of
-	remote   string    // The remote path
-	url      string    // download path
-	id       int       // ID of this object
-	bytes    int64     // Bytes in the object
-	modTime  time.Time // Modified time of the object
-	mimeType string
+type Photo struct {
+	fs     *Fs
+	parent nixplayapi.Container
+	photo  nixplayapi.Photo
 }
 
 // ------------------------------------------------------------
@@ -205,10 +206,7 @@ func (f *Fs) listContainers(ctx context.Context, prefix string, containerType ni
 			return nil, err
 		}
 		d := fs.NewDir(prefix+name, f.dirTime())
-
-		id := c.ID()
-		idString := base64.URLEncoding.EncodeToString(id[:])
-		d.SetID(idString)
+		d.SetID(idString(c.ID()))
 
 		itemCount, err := c.PhotoCount(ctx)
 		if err != nil {
@@ -230,7 +228,7 @@ func (f *Fs) listPhotos(ctx context.Context, prefix string, containerType nixpla
 		return nil, fmt.Errorf("failed to get container %q: %w", dir, err)
 	}
 	if c == nil {
-		return nil, fmt.Errorf("container %q does not exist: %w", dir)
+		return nil, fmt.Errorf("container %q does not exist", dir)
 	}
 
 	photos, err := c.Photos(ctx)
@@ -238,20 +236,14 @@ func (f *Fs) listPhotos(ctx context.Context, prefix string, containerType nixpla
 		return nil, fmt.Errorf("failed to get photos: %w", err)
 	}
 
+	//xxx need to dedup file names, double check usages of Name and NameUnique
+	//and PhotosWithName and PhotoWithUniqueName to make sure all usages are ok.
+
 	for _, p := range photos {
-		id := p.ID()
-		idInt := int(binary.BigEndian.Uint64(id[:]))
-
-		name, err := p.Name(ctx)
-		if err != nil {
-			return nil, err
-		}
-
-		entries = append(entries, &Object{
-			fs:      f,
-			id:      idInt,
-			modTime: f.startTime, //xxx can I do better?
-			remote:  prefix + name,
+		entries = append(entries, &Photo{
+			fs:     f,
+			parent: c,
+			photo:  p,
 		})
 	}
 
@@ -267,9 +259,32 @@ func (f *Fs) dirTime() time.Time {
 // it returns the error fs.ErrorObjectNotFound.
 func (f *Fs) NewObject(ctx context.Context, remote string) (_ fs.Object, err error) {
 	defer log.Trace(f, "remote=%q", remote)("err=%v", &err)
+	match, _, pattern := patterns.match(f.root, remote, true)
+	if pattern == nil {
+		return nil, fs.ErrorObjectNotFound
+	}
+	containerName := match[1]
+	photoName := match[2]
+	c, err := f.nixplayClient.Container(ctx, pattern.containerType, containerName)
+	if err != nil {
+		return nil, fmt.Errorf("failed to get container: %w", err)
+	}
+	if c == nil {
+		return nil, fs.ErrorObjectNotFound
+	}
+	photo, err := c.PhotoWithUniqueName(ctx, photoName)
+	if err != nil {
+		return nil, fmt.Errorf("failed to get photos: %w", err)
+	}
+	if photo == nil {
+		return nil, fs.ErrorObjectNotFound
+	}
 
-	//xxx todo
-	return nil, fs.ErrorObjectNotFound
+	return &Photo{
+		fs:     f,
+		parent: c,
+		photo:  photo,
+	}, nil
 }
 
 // Put the object into the bucket
@@ -279,26 +294,76 @@ func (f *Fs) NewObject(ctx context.Context, remote string) (_ fs.Object, err err
 // The new object may have been created if an error is returned
 func (f *Fs) Put(ctx context.Context, in io.Reader, src fs.ObjectInfo, options ...fs.OpenOption) (fs.Object, error) {
 	defer log.Trace(f, "src=%+v", src)("")
-	// Temporary Object under construction
-	o := &Object{
-		fs:     f,
-		remote: src.Remote(),
+	match, _, pattern := patterns.match(f.root, src.Remote(), true)
+	if pattern == nil || !pattern.isFile || !pattern.canUpload {
+		return nil, errCantUpload
 	}
-	return o, o.Update(ctx, in, src, options...)
+	containerName := match[1]
+	fileName := match[2]
+
+	c, err := f.nixplayClient.Container(ctx, pattern.containerType, containerName)
+	if err != nil {
+		return nil, fmt.Errorf("failed to get container to upload photo into: %w", err)
+	}
+
+	opts := nixplayapi.AddPhotoOptions{
+		FileSize: src.Size(),
+	}
+	if mimeTyper, ok := src.(fs.MimeTyper); ok {
+		opts.MIMEType = mimeTyper.MimeType(ctx)
+	}
+
+	photo, err := c.AddPhoto(ctx, fileName, in, opts)
+	if err != nil {
+		return nil, fmt.Errorf("failed to add photo: %w", err)
+	}
+
+	//xxx can I just ignore OpenOption?
+
+	o := &Photo{
+		fs:     f,
+		parent: c,
+		photo:  photo,
+	}
+	return o, nil
 }
 
 // Mkdir creates the album if it doesn't exist
 func (f *Fs) Mkdir(ctx context.Context, dir string) (err error) {
-	//xxx todo
-	return errors.New("TODO")
+	defer log.Trace(f, "dir=%q", dir)("err=%v", &err)
+	match, _, pattern := patterns.match(f.root, dir, false)
+	if pattern == nil {
+		return fs.ErrorDirNotFound
+	}
+	if !pattern.canMkdir {
+		return errCantMkdir
+	}
+	containerName := match[1]
+	_, err = f.nixplayClient.CreateContainer(ctx, pattern.containerType, containerName)
+	return err
 }
 
 // Rmdir deletes the bucket if the fs is at the root
 //
 // Returns an error if it isn't empty
 func (f *Fs) Rmdir(ctx context.Context, dir string) (err error) {
-	//xxx todo
-	return errors.New("TODO")
+	defer log.Trace(f, "dir=%q")("err=%v", &err)
+	match, _, pattern := patterns.match(f.root, dir, false)
+	if pattern == nil {
+		return fs.ErrorDirNotFound
+	}
+	if !pattern.canMkdir {
+		return errCantMkdir
+	}
+	containerName := match[1]
+	c, err := f.nixplayClient.Container(ctx, pattern.containerType, containerName)
+	if err != nil {
+		return err
+	}
+	if c == nil {
+		return fs.ErrorDirNotFound
+	}
+	return c.Delete(ctx)
 }
 
 // Features returns the optional features of this Fs
@@ -310,133 +375,152 @@ func (f *Fs) Features() *fs.Features {
 // ------------------------------------------------------------
 
 // Fs returns the parent Fs
-func (o *Object) Fs() fs.Info {
+func (o *Photo) Fs() fs.Info {
 	return o.fs
 }
 
 // Return a string version
-func (o *Object) String() string {
+func (o *Photo) String() string {
 	//xxx todo
 	if o == nil {
 		return "<nil>"
 	}
-	return o.remote
+	return o.Remote()
 }
 
 // Remote returns the remote path
-func (o *Object) Remote() string {
-	//xxx todo
-	return o.remote
+func (o *Photo) Remote() string {
+	containerType := o.parent.ContainerType()
+	parentName, err := o.parent.Name(context.TODO())
+	if err != nil {
+		fs.Debugf(o, "Remote: Failed to read parent name: %v", err)
+		return ""
+	}
+
+	name, err := o.photo.NameUnique(context.TODO())
+	if err != nil {
+		fs.Debugf(o, "Remote: Failed to read name: %v", err)
+		return ""
+	}
+
+	remote := filepath.Join(string(containerType), parentName, name)
+	return remote
 }
 
 // Hash returns the Md5sum of an object returning a lowercase hex string
-func (o *Object) Hash(ctx context.Context, t hash.Type) (string, error) {
-	//xxx todo
-	return "", hash.ErrUnsupported
+func (o *Photo) Hash(ctx context.Context, t hash.Type) (string, error) {
+	//xxx I need tos et some flag to say this iss supported
+
+	hash, err := o.photo.MD5Hash(context.TODO())
+	if err != nil {
+		return "", err
+	}
+
+	return hex.EncodeToString(hash[:]), nil
 }
 
 // Size returns the size of an object in bytes
-func (o *Object) Size() int64 {
-	//xxx todo
-	return 0
+func (o *Photo) Size() int64 {
+	size, err := o.photo.Size(context.TODO())
+	if err != nil {
+		fs.Debugf(o, "Size: Failed to get size: %v", err)
+		return -1
+	}
+	return size
 }
 
 // ModTime returns the modification time of the object
 //
 // It attempts to read the objects mtime and if that isn't present the
 // LastModified returned in the http headers
-func (o *Object) ModTime(ctx context.Context) time.Time {
+func (o *Photo) ModTime(ctx context.Context) time.Time {
 	//xxx todo
 	return time.Time{}
 }
 
 // SetModTime sets the modification time of the local fs object
-func (o *Object) SetModTime(ctx context.Context, modTime time.Time) (err error) {
+func (o *Photo) SetModTime(ctx context.Context, modTime time.Time) (err error) {
 	//xxx todo
 	return fs.ErrorCantSetModTime
 }
 
 // Storable returns a boolean as to whether this object is storable
-func (o *Object) Storable() bool {
+func (o *Photo) Storable() bool {
 	//xxx todo
 	return true
 }
 
 // Open an object for read
-func (o *Object) Open(ctx context.Context, options ...fs.OpenOption) (in io.ReadCloser, err error) {
-	//xxx todo
-	return nil, errors.New("TODO")
+func (o *Photo) Open(ctx context.Context, options ...fs.OpenOption) (in io.ReadCloser, err error) {
+
+	//xxx can I just ignore OpenOption?
+
+	return o.photo.Open(ctx)
 }
+
+// xxx I need to look into update some more, If this is supposed to update the contents
+// of an image then I need to delete the existing one and upload a new copy
 
 // Update the object with the contents of the io.Reader, modTime and size
 //
 // The new object may have been created if an error is returned
-func (o *Object) Update(ctx context.Context, in io.Reader, src fs.ObjectInfo, options ...fs.OpenOption) (err error) {
+func (o *Photo) Update(ctx context.Context, in io.Reader, src fs.ObjectInfo, options ...fs.OpenOption) (err error) {
 	defer log.Trace(o, "src=%+v", src)("err=%v", &err)
-	match, _, pattern := patterns.match(o.fs.root, o.remote, true)
-	if pattern == nil || !pattern.isFile || !pattern.canUpload {
-		return errCantUpload
-	}
+	// Nixplay doesn't allow us to update existing items so what we will do
+	// instead is delete the existing item and then upload the new version. The
+	// downside to this is if photo is in an album and happens to be linked to a
+	// playlist then we we delete the photo in the album it will delete it from
+	// the playlist too.
+	//
+	// xxx doc this
 
-	albumName := match[1]
-	fileName := match[2]
-
-	//xxx
-	fmt.Println(albumName)
-	fmt.Println(fileName)
-
-	albums, err := o.fs.nixplayClient.GetAlbumsByName(albumName)
+	// We use name instead of the unique name here because name is what nixplay
+	// knows the photo as, so when we upload the new copy we want it to have the
+	// same name that nixplay already knows about.
+	name, err := o.photo.Name(ctx)
 	if err != nil {
-		return fmt.Errorf("failed to get album: %w", err)
-	}
-	if len(albums) != 1 {
-		return fmt.Errorf("got %d albums for %q", len(albums), albumName)
+		return fmt.Errorf("failed to get name of existing photo: %w", err)
 	}
 
-	// xxx why is file name and file type separate? Is it mime type or extension or ...?
-	// lets just guess it is the mime type for now and hardcode jpeg?
+	if err := o.photo.Delete(ctx); err != nil {
+		return fmt.Errorf("failed to delete existing photo: %w", err)
+	}
 
-	// xxx ugh this is a really inefficient way to get the file size... but it works for now.
-	var buf bytes.Buffer
-	size, err := io.Copy(&buf, in)
+	//xxx can I just ignore OpenOption like this?
+
+	newPhoto, err := o.parent.AddPhoto(ctx, name, in, nixplayapi.AddPhotoOptions{})
 	if err != nil {
-		fmt.Println(err)
+		return fmt.Errorf("failed to add new photo: %w", err)
 	}
 
-	fileType := "image/jpeg"
-	err = o.fs.nixplayClient.UploadPhoto(albums[0].ID, fileName, fileType, uint64(size), io.NopCloser(&buf))
-	if err != nil {
-		return fmt.Errorf("failed to upload photo: %w", err)
-	}
-
-	// xxx so now we have uploaded the photo, but the problem is UploadPhoto
-	// doesn't tell us the new ID of the photo that was uploaded
-	// So for now we will just error out, this needs to get fixed though.
-	return errors.New("TODO upload worked but due to issue where UploadPhoto doesn't tell us ID of uploaded photo we can't continue")
+	o.photo = newPhoto
+	return nil
 }
 
 // Remove an object
-func (o *Object) Remove(ctx context.Context) (err error) {
-	//xxx todo
-	return errors.New("TODO")
+func (o *Photo) Remove(ctx context.Context) (err error) {
+	return o.photo.Delete(ctx)
 }
 
 // MimeType of an Object if known, "" otherwise
-func (o *Object) MimeType(ctx context.Context) string {
+func (o *Photo) MimeType(ctx context.Context) string {
 	//xxx todo
-	return o.mimeType
+	return ""
 }
 
 // ID of an Object if known, "" otherwise
-func (o *Object) ID() string {
-	//xxx todo
-	return strconv.Itoa(o.id)
+func (o *Photo) ID() string {
+	return idString(o.photo.ID())
+}
+
+func idString(id nixplaytypes.ID) string {
+	return base64.URLEncoding.EncodeToString(id[:])
 }
 
 // Check the interfaces are satisfied
 var (
 	_ fs.Fs        = &Fs{}
-	_ fs.Object    = &Object{}
-	_ fs.MimeTyper = &Object{}
-	_ fs.IDer      = &Object{}
+	_ fs.Object    = &Photo{}
+	_ fs.MimeTyper = &Photo{}
+	_ fs.IDer      = &Photo{}
 )
