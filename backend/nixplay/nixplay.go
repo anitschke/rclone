@@ -10,7 +10,6 @@ import (
 	"path"
 	"path/filepath"
 	"strings"
-	"sync"
 	"time"
 
 	nixplayapi "github.com/anitschke/go-nixplay"
@@ -123,11 +122,8 @@ type Fs struct {
 	root     string       // the path we are working on if any
 	opt      Options      // parsed options
 	features *fs.Features // optional features
-	//unAuth        *rest.Client           // unauthenticated http client  //xxx add
-	//srv           *rest.Client           // the connection to the server //xxx add
 	//pacer         *fs.Pacer              // To pace the API calls //xxx add
-	startTime     time.Time  // time Fs was started - used for datestamps //xxx do I really need this?
-	createMu      sync.Mutex // held when creating albums to prevent dupes //xxx do I need this?
+	startTime     time.Time // time Fs was started - used for datestamps //xxx do I really need this?
 	nixplayClient nixplayapi.Client
 }
 
@@ -167,8 +163,7 @@ func (f *Fs) Precision() time.Duration {
 
 // Hashes returns the supported hash sets.
 func (f *Fs) Hashes() hash.Set {
-	//xxx I think that we can support hashes
-	return hash.Set(hash.None)
+	return hash.Set(hash.MD5)
 }
 
 // List the objects and directories in dir into entries.  The
@@ -235,9 +230,6 @@ func (f *Fs) listPhotos(ctx context.Context, prefix string, containerType nixpla
 	if err != nil {
 		return nil, fmt.Errorf("failed to get photos: %w", err)
 	}
-
-	//xxx need to dedup file names, double check usages of Name and NameUnique
-	//and PhotosWithName and PhotoWithUniqueName to make sure all usages are ok.
 
 	for _, p := range photos {
 		entries = append(entries, &Photo{
@@ -309,6 +301,12 @@ func (f *Fs) Put(ctx context.Context, in io.Reader, src fs.ObjectInfo, options .
 	opts := nixplayapi.AddPhotoOptions{
 		FileSize: src.Size(),
 	}
+
+	// The nixplayClient already has code to determine mime type that is geared
+	// toward the photo types that are supported by nixplay, so we will only get
+	// the mime type if the src is a MimeTyper instead of using the MimeType
+	// helper function since that tries to determine mime type if not know and
+	// it doesn't necessarily support all the photo types supported by nixplay.
 	if mimeTyper, ok := src.(fs.MimeTyper); ok {
 		opts.MIMEType = mimeTyper.MimeType(ctx)
 	}
@@ -353,7 +351,7 @@ func (f *Fs) Rmdir(ctx context.Context, dir string) (err error) {
 		return fs.ErrorDirNotFound
 	}
 	if !pattern.canMkdir {
-		return errCantMkdir
+		return errCantRmdir
 	}
 	containerName := match[1]
 	c, err := f.nixplayClient.Container(ctx, pattern.containerType, containerName)
@@ -381,7 +379,6 @@ func (o *Photo) Fs() fs.Info {
 
 // Return a string version
 func (o *Photo) String() string {
-	//xxx todo
 	if o == nil {
 		return "<nil>"
 	}
@@ -409,9 +406,11 @@ func (o *Photo) Remote() string {
 
 // Hash returns the Md5sum of an object returning a lowercase hex string
 func (o *Photo) Hash(ctx context.Context, t hash.Type) (string, error) {
-	//xxx I need tos et some flag to say this iss supported
+	if t != hash.MD5 {
+		return "", hash.ErrUnsupported
+	}
 
-	hash, err := o.photo.MD5Hash(context.TODO())
+	hash, err := o.photo.MD5Hash(ctx)
 	if err != nil {
 		return "", err
 	}
@@ -457,9 +456,6 @@ func (o *Photo) Open(ctx context.Context, options ...fs.OpenOption) (in io.ReadC
 
 	return o.photo.Open(ctx)
 }
-
-// xxx I need to look into update some more, If this is supposed to update the contents
-// of an image then I need to delete the existing one and upload a new copy
 
 // Update the object with the contents of the io.Reader, modTime and size
 //
