@@ -28,8 +28,6 @@ var (
 	errCantMkdir  = errors.New("can't make directories here")
 )
 
-// xxx "Use lib/encoder to make sure we can encode any path name and rclone info to help determine the encodings needed"
-
 //xxx test what happens if I try to put two photos with same content in same album
 
 //xxx test what happens if I try to put two photos with same name in same album
@@ -218,7 +216,7 @@ func (f *Fs) listContainers(ctx context.Context, prefix string, containerType ni
 func (f *Fs) listPhotos(ctx context.Context, prefix string, containerType nixplaytypes.ContainerType, dir string) (entries fs.DirEntries, err error) {
 	defer log.Trace(f, "prefix=%q dir=%q", prefix, dir)("err=%v", &err)
 
-	c, err := f.nixplayClient.Container(ctx, containerType, dir)
+	c, err := f.nixplayClient.ContainerWithUniqueName(ctx, containerType, dir)
 	if err != nil {
 		return nil, fmt.Errorf("failed to get container %q: %w", dir, err)
 	}
@@ -257,7 +255,7 @@ func (f *Fs) NewObject(ctx context.Context, remote string) (_ fs.Object, err err
 	}
 	containerName := match[1]
 	photoName := match[2]
-	c, err := f.nixplayClient.Container(ctx, pattern.containerType, containerName)
+	c, err := f.nixplayClient.ContainerWithUniqueName(ctx, pattern.containerType, containerName)
 	if err != nil {
 		return nil, fmt.Errorf("failed to get container: %w", err)
 	}
@@ -293,7 +291,7 @@ func (f *Fs) Put(ctx context.Context, in io.Reader, src fs.ObjectInfo, options .
 	containerName := match[1]
 	fileName := match[2]
 
-	c, err := f.nixplayClient.Container(ctx, pattern.containerType, containerName)
+	c, err := f.nixplayClient.ContainerWithUniqueName(ctx, pattern.containerType, containerName)
 	if err != nil {
 		return nil, fmt.Errorf("failed to get container to upload photo into: %w", err)
 	}
@@ -354,7 +352,7 @@ func (f *Fs) Rmdir(ctx context.Context, dir string) (err error) {
 		return errCantRmdir
 	}
 	containerName := match[1]
-	c, err := f.nixplayClient.Container(ctx, pattern.containerType, containerName)
+	c, err := f.nixplayClient.ContainerWithUniqueName(ctx, pattern.containerType, containerName)
 	if err != nil {
 		return err
 	}
@@ -470,9 +468,10 @@ func (o *Photo) Update(ctx context.Context, in io.Reader, src fs.ObjectInfo, opt
 	//
 	// xxx doc this
 
-	// We use name instead of the unique name here because name is what nixplay
-	// knows the photo as, so when we upload the new copy we want it to have the
-	// same name that nixplay already knows about.
+	// We need to use the name instead of the unique name here when we re-upload
+	// because that is the name that nixplay knows the photo as, so when we
+	// upload the new copy we want it to have the same name that nixplay already
+	// knows about.
 	name, err := o.photo.Name(ctx)
 	if err != nil {
 		return fmt.Errorf("failed to get name of existing photo: %w", err)
